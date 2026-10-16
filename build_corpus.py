@@ -11,6 +11,8 @@ Example:
 """
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -108,3 +110,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Abandoned streaming iterators leave background download threads alive, which can
+    # crash interpreter finalization (PyGILState_Release). Everything is saved; skip it.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
