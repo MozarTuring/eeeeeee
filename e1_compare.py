@@ -230,9 +230,10 @@ def main():
                 axes[0].plot(x, pm[lab][metric], marker="o", label=lab)
             axes[0].set(title="All sources", ylabel=f"{metric.upper()} (raw)")
             axes[0].legend()
+            colors = plt.cm.tab20(np.linspace(0, 1, 20))
             for ax, (_, lab) in zip(axes[1:], pos_runs):
                 for s, src in enumerate(sources):
-                    ax.plot(x, pm_src[lab][s][metric], marker=".", lw=1, label=src)
+                    ax.plot(x, pm_src[lab][s][metric], marker=".", lw=1, label=src, color=colors[s % 20])
                 ax.set(title=lab)
             axes[-1].legend(fontsize=6, ncol=2)
             for ax in axes:

@@ -17,4 +17,4 @@ export PKQ_INTERACTIVE=
 export MEM_PER_TASK="$((80 * PKQ_GPU_NUM))G"
 export CPUS_PER_TASK=$((8 * PKQ_GPU_NUM))
 export CUDA_VISIBLE_DEVICES=1
-export PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --bidirectional --norm-ref ${PKQ_DATA_DIR}/backup/20261017_115544/output/summary.json --out output --label M0-bidir"
+export PKQ_RUN_COMMAND="python e1_compare.py --ref ${PKQ_DATA_DIR}/backup/20261017_115544/output --runs ${PKQ_DATA_DIR}/backup/20261017_115544/output ${PKQ_DATA_DIR}/backup/20261017_121053/output ${PKQ_DATA_DIR}/backup/20261017_121130/output --out output"

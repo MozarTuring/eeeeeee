@@ -2,7 +2,7 @@ PKQ_PYTHON="3.10"
 PKQ_SERVER_NAME=berzeliushopper
 # PKQ_SERVER_NAME=arrhenius
 # PKQ_SERVER_NAME=berzeliusampere
-PKQ_GPU_NUM=1
+PKQ_GPU_NUM=4
 PKQ_NODES_NUM=1
 PKQ_RUN_TIME="1-00:00:00"
 PKQ_SLURM_FILE=slurm.sh
@@ -27,4 +27,6 @@ CUDA_VISIBLE_DEVICES=1
 
 # PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --bidirectional --norm-ref ${PKQ_DATA_DIR}/backup/20261017_115544/output/summary.json --out output --label M0-bidir"
 
-PKQ_RUN_COMMAND="python e1_compare.py --ref ${PKQ_DATA_DIR}/backup/20261017_115544/output --runs ${PKQ_DATA_DIR}/backup/20261017_115544/output ${PKQ_DATA_DIR}/backup/20261017_121053/output ${PKQ_DATA_DIR}/backup/20261017_121130/output --out output"
+# PKQ_RUN_COMMAND="python e1_compare.py --ref ${PKQ_DATA_DIR}/backup/20261017_115544/output --runs ${PKQ_DATA_DIR}/backup/20261017_115544/output ${PKQ_DATA_DIR}/backup/20261017_121053/output ${PKQ_DATA_DIR}/backup/20261017_121130/output --out output"
+
+PKQ_RUN_COMMAND="torchrun --nproc_per_node=gpu train_mntp.py --out output"
