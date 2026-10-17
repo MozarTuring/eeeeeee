@@ -191,8 +191,8 @@ def main():
     ap.add_argument("--sae-kind", default="gemma_scope")
     ap.add_argument("--sae-repo", default="google/gemma-scope-2b-pt-res")
     ap.add_argument("--sae-width", default="16k")
-    ap.add_argument("--sae-l0-dir", default=None, help="e.g. average_l0_82; default: closest to --target-l0")
-    ap.add_argument("--target-l0", type=int, default=100)
+    ap.add_argument("--sae-l0-dir", default="average_l0_82",
+                    help="Gemma Scope variant; SPLARE uses the one with L0 closest to 100 (82 for layer 12/16k)")
     ap.add_argument("--norm-ref", default=None, help="summary.json of the reference run (M0)")
     ap.add_argument("--calib-docs", type=int, default=512)
     ap.add_argument("--max-batch-tokens", type=int, default=16384)
@@ -223,7 +223,7 @@ def main():
     print(f"attention mode check ok (bidirectional={args.bidirectional}, max diff {attn_check_diff:.3g})")
 
     sae = load_sae(args.sae_kind, repo=args.sae_repo, layer=args.layer, width=args.sae_width,
-                   target_l0=args.target_l0, l0_dir=args.sae_l0_dir, device=device)
+                   l0_dir=args.sae_l0_dir, device=device)
     if sae.d_model != model.config.hidden_size:
         raise ValueError(f"SAE d_model {sae.d_model} != model hidden size {model.config.hidden_size}")
     print(f"SAE: {sae.meta['repo']}/{sae.meta['dir']} (width {sae.width})")

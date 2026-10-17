@@ -4,11 +4,9 @@ Only Gemma Scope (JumpReLU, residual stream) is implemented for the pilot.
 Gemma Scope params are released with the activation normalisation folded in,
 so they are applied to raw residual-stream activations.
 """
-import re
-
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download, list_repo_files
+from huggingface_hub import hf_hub_download
 
 
 class JumpReLUSAE(torch.nn.Module):
@@ -37,29 +35,15 @@ class JumpReLUSAE(torch.nn.Module):
         return z @ self.W_dec + self.b_dec
 
 
-def resolve_gemma_scope_dir(repo, layer, width, target_l0=None, l0_dir=None):
-    """Return 'layer_{L}/width_{W}/average_l0_{N}'.
-
-    If l0_dir is not given, pick the released SAE whose average L0 is closest
-    to target_l0 (the SPLARE paper uses the one closest to 100).
-    """
-    prefix = f"layer_{layer}/width_{width}/"
-    if l0_dir is not None:
-        return prefix + l0_dir
-    files = list_repo_files(repo)
-    l0s = sorted({int(m.group(1)) for f in files
-                  if f.startswith(prefix) and f.endswith("params.npz")
-                  and (m := re.search(r"average_l0_(\d+)/", f))})
-    if not l0s:
-        raise FileNotFoundError(f"No SAEs found under {repo}/{prefix}")
-    target = 100 if target_l0 is None else target_l0
-    best = min(l0s, key=lambda v: abs(v - target))
-    return f"{prefix}average_l0_{best}"
-
-
 def load_gemma_scope(repo="google/gemma-scope-2b-pt-res", layer=12, width="16k",
-                     target_l0=100, l0_dir=None, device="cuda", dtype=torch.float32):
-    sae_dir = resolve_gemma_scope_dir(repo, layer, width, target_l0, l0_dir)
+                     l0_dir="average_l0_82", device="cuda", dtype=torch.float32):
+    """Load layer_{layer}/width_{width}/{l0_dir}/params.npz (must already be in the HF cache).
+
+    SPLARE uses the released variant with average L0 closest to 100; for
+    layer 12 / width 16k that is average_l0_82. Other layer/width combinations
+    have different variants, so pass the matching l0_dir.
+    """
+    sae_dir = f"layer_{layer}/width_{width}/{l0_dir}"
     path = hf_hub_download(repo, f"{sae_dir}/params.npz")
     p = np.load(path)
     t = lambda k: torch.from_numpy(p[k]).to(device=device, dtype=dtype)
