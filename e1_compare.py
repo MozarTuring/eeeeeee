@@ -112,6 +112,20 @@ def main():
         rows = [[src] + [r["summary"]["views"][view][src]["fvu"] for r, _ in present] for src in sources]
         md += [f"\n## FVU per source ({view})", md_table(["source"] + [l for _, l in present], rows)]
 
+    # 2b. FVU by token position (raw view; runs made before this was added have no by_position).
+    pos_runs = [(r, lab) for r, lab in zip(runs, labels) if "by_position" in r["summary"]]
+    if pos_runs:
+        buckets = list(pos_runs[0][0]["summary"]["by_position"]["raw"])
+        get = lambda r, b, src: (r["summary"]["by_position"]["raw"][b].get(src) or {}).get("fvu", float("nan"))
+        rows = [[lab] + [get(r, b, "all") for b in buckets] for r, lab in pos_runs]
+        md += ["\n## FVU by token position (raw, all sources)", md_table(["run"] + buckets, rows)]
+        report["fvu_by_position"] = {lab: {b: get(r, b, "all") for b in buckets} for r, lab in pos_runs}
+        for r, lab in pos_runs:
+            rows = [[src] + [get(r, b, src) for b in buckets] for src in sources]
+            md += [f"\n## FVU by position per source — {lab}", md_table(["source"] + buckets, rows)]
+            report["fvu_by_position"][lab]["per_source"] = {
+                src: {b: get(r, b, src) for b in buckets} for src in sources}
+
     # 3. Feature-frequency drift vs noise floor (raw view).
     ra = ref["arrays"]["raw"]
     n_ref_h0 = ra["n"][:, 0].sum()
@@ -183,6 +197,24 @@ def main():
     ax.legend()
     fig.tight_layout()
     fig.savefig(out / "fvu_per_source.png", dpi=150)
+
+    if pos_runs:
+        fig, axes = plt.subplots(1, len(pos_runs) + 1, figsize=(4.5 * (len(pos_runs) + 1), 4), sharey=True)
+        x = np.arange(len(buckets))
+        for r, lab in pos_runs:
+            axes[0].plot(x, [get(r, b, "all") for b in buckets], marker="o", label=lab)
+        axes[0].set(title="All sources", ylabel="FVU (raw)")
+        axes[0].legend()
+        for ax, (r, lab) in zip(axes[1:], pos_runs):
+            for src in sources:
+                ax.plot(x, [get(r, b, src) for b in buckets], marker=".", lw=1, label=src)
+            ax.set(title=lab)
+        axes[-1].legend(fontsize=6, ncol=2)
+        for ax in axes:
+            ax.set_xticks(x, buckets)
+            ax.set_xlabel("token position")
+        fig.tight_layout()
+        fig.savefig(out / "fvu_by_position.png", dpi=150)
 
     print((out / "e1_report.md").read_text())
 

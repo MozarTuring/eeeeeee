@@ -46,15 +46,22 @@ from drift.sae import load_sae
 
 L0_BINS = 2049  # 0..2047, last bin = overflow
 NORM_EDGES = np.logspace(-1, 4, 201)  # log-spaced bins for ||x||
+# Token-position buckets (position 0 = BOS, excluded). Under causal attention a token at
+# position p sees p tokens; under bidirectional attention it sees the whole document.
+POS_BOUNDARIES = (9, 33, 129)
+POS_LABELS = ["1-8", "9-32", "33-128", "129+"]
 
 
 class Stats:
-    """Streaming accumulators over G = n_sources * 2 groups (source, half)."""
+    """Streaming accumulators over G = n_sources * 2 groups (source, half),
+    plus reconstruction stats over P = n_sources * n_pos_buckets groups (source, position bucket)."""
 
-    def __init__(self, n_groups, width, d_model, device):
-        G, W = n_groups, width
+    def __init__(self, n_groups, n_pos_groups, width, d_model, device):
+        G, W, P = n_groups, width, n_pos_groups
         f64 = dict(dtype=torch.float64, device=device)
-        self.G, self.W = G, W
+        self.G, self.W, self.P = G, W, P
+        self.pos = {k: torch.zeros(P, **f64) for k in ["n", "sum_sq", "err2", "cos", "norm", "l0"]}
+        self.pos["sum_x"] = torch.zeros(P, d_model, **f64)
         self.n = torch.zeros(G, **f64)
         self.sum_x = torch.zeros(G, d_model, **f64)
         self.sum_sq = torch.zeros(G, **f64)
@@ -71,23 +78,29 @@ class Stats:
         self.norm_edges = torch.tensor(NORM_EDGES, dtype=torch.float32, device=device)
 
     @torch.no_grad()
-    def update(self, x, g, sae):
-        """x: (N, d) float32 activations, g: (N,) group ids."""
+    def update(self, x, g, gp, sae):
+        """x: (N, d) float32 activations, g: (N,) (source, half) ids, gp: (N,) (source, position) ids."""
         z = sae.encode(x)
         x_hat = sae.decode(z)
         G, W = self.G, self.W
 
         norm = x.norm(dim=-1)
         l0 = (z > 0).sum(-1)
+        err2 = (x - x_hat).pow(2).sum(-1)
+        cos = torch.nn.functional.cosine_similarity(x, x_hat, dim=-1)
         add = lambda acc, v: acc.index_add_(0, g, v.double())
         add(self.n, torch.ones_like(norm))
         self.sum_x.index_add_(0, g, x.double())
         add(self.sum_sq, norm ** 2)
-        add(self.err2, (x - x_hat).pow(2).sum(-1))
-        add(self.cos, torch.nn.functional.cosine_similarity(x, x_hat, dim=-1))
+        add(self.err2, err2)
+        add(self.cos, cos)
         add(self.norm, norm)
         add(self.norm_sq, norm ** 2)
         add(self.l0, l0.float())
+
+        for k, v in [("n", torch.ones_like(norm)), ("sum_sq", norm ** 2), ("err2", err2),
+                     ("cos", cos), ("norm", norm), ("l0", l0.float()), ("sum_x", x)]:
+            self.pos[k].index_add_(0, gp, v.double())
 
         self.l0_hist += torch.bincount(g * L0_BINS + l0.clamp(max=L0_BINS - 1),
                                        minlength=G * L0_BINS)
@@ -118,6 +131,8 @@ class Stats:
             "fire": self.fire.cpu().numpy().reshape(S, 2, W),
             "act_sum": self.act_sum.cpu().numpy().reshape(S, 2, W).astype(np.float32),
             "act_max": self.act_max.cpu().numpy(),
+            **{f"pos_{k}": v.cpu().numpy().reshape(S, len(POS_LABELS), *v.shape[1:])
+               for k, v in self.pos.items()},
         }
 
 
@@ -170,13 +185,44 @@ def summarize_all(a, sources, dense_thresh):
     return out
 
 
+def summarize_positions(a, sources):
+    """Reconstruction stats per position bucket: over all sources and per source."""
+    def agg(sel):  # sel: boolean (S, n_buckets)
+        n = a["pos_n"][sel].sum()
+        if n == 0:
+            return None
+        sum_x = a["pos_sum_x"][sel].sum(0)
+        total_var = a["pos_sum_sq"][sel].sum() - (sum_x @ sum_x) / n
+        return {"n_tokens": int(n),
+                "fvu": float(a["pos_err2"][sel].sum() / total_var),
+                "mean_cos": float(a["pos_cos"][sel].sum() / n),
+                "mean_l0": float(a["pos_l0"][sel].sum() / n),
+                "mean_norm": float(a["pos_norm"][sel].sum() / n)}
+
+    S, B = len(sources), len(POS_LABELS)
+    out = {}
+    for b, lab in enumerate(POS_LABELS):
+        col = np.zeros((S, B), bool)
+        col[:, b] = True
+        out[lab] = {"all": agg(col)}
+        for s, name in enumerate(sources):
+            cell = np.zeros((S, B), bool)
+            cell[s, b] = True
+            out[lab][name] = agg(cell)
+    return out
+
+
 @torch.no_grad()
 def valid_activations(model, capture, ids, attn, src, half, bidirectional, bos_id, device):
     ids, attn = ids.to(device), attn.to(device)
     x = forward_resid(model, capture, ids, attn, bidirectional)
     valid = attn.bool() & (ids != bos_id)
-    g = (src.to(device) * 2 + half.to(device))[:, None].expand_as(ids)
-    return x[valid].float(), g[valid]
+    src = src.to(device)[:, None].expand_as(ids)
+    g = src * 2 + half.to(device)[:, None]
+    pos = torch.arange(ids.shape[1], device=device)[None].expand_as(ids)
+    bucket = torch.bucketize(pos, torch.tensor(POS_BOUNDARIES, device=device), right=True)
+    gp = src * len(POS_LABELS) + bucket
+    return x[valid].float(), g[valid], gp[valid]
 
 
 def main():
@@ -233,7 +279,7 @@ def main():
     calib_ids = np.sort(rng.choice(len(corpus), min(args.calib_docs, len(corpus)), replace=False))
     norm_sum, norm_n = 0.0, 0
     for ids, attn, src, half in corpus.batches(args.max_batch_tokens, pad_id, calib_ids):
-        x, _ = valid_activations(model, capture, ids, attn, src, half, args.bidirectional, bos_id, device)
+        x, _, _ = valid_activations(model, capture, ids, attn, src, half, args.bidirectional, bos_id, device)
         norm_sum += x.norm(dim=-1).double().sum().item()
         norm_n += len(x)
     calib_mean_norm = norm_sum / norm_n
@@ -245,13 +291,15 @@ def main():
     print(f"calib mean norm {calib_mean_norm:.2f}; views: {views}")
 
     G = len(sources) * 2
-    stats = {v: Stats(G, sae.width, sae.d_model, device) for v in views}
+    P = len(sources) * len(POS_LABELS)
+    stats = {v: Stats(G, P, sae.width, sae.d_model, device) for v in views}
     n_batches = sum(1 for _ in corpus.batches(args.max_batch_tokens, pad_id))
     for ids, attn, src, half in tqdm(corpus.batches(args.max_batch_tokens, pad_id), total=n_batches):
-        x, g = valid_activations(model, capture, ids, attn, src, half, args.bidirectional, bos_id, device)
+        x, g, gp = valid_activations(model, capture, ids, attn, src, half, args.bidirectional, bos_id, device)
         for v, scale in views.items():
             for i in range(0, len(x), args.sae_chunk):
-                stats[v].update(x[i: i + args.sae_chunk] * scale, g[i: i + args.sae_chunk], sae)
+                sl = slice(i, i + args.sae_chunk)
+                stats[v].update(x[sl] * scale, g[sl], gp[sl], sae)
 
     arrays = {v: s.to_numpy(len(sources)) for v, s in stats.items()}
     summary = {
@@ -266,6 +314,7 @@ def main():
                 "gpu": torch.cuda.get_device_name(), "host": platform.node()},
         "runtime_sec": time.time() - t0,
         "views": {v: summarize_all(a, sources, args.dense_thresh) for v, a in arrays.items()},
+        "by_position": {v: summarize_positions(a, sources) for v, a in arrays.items()},
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
     np.savez_compressed(out / "feature_stats.npz", norm_edges=NORM_EDGES,
@@ -274,6 +323,9 @@ def main():
     r = summary["views"]["raw"]["all"]
     print(f"[{summary['label']}] raw: FVU {r['fvu']:.4f} cos {r['mean_cos']:.4f} L0 {r['mean_l0']:.1f} "
           f"dead {r['frac_dead']:.3%} dense {r['frac_dense']:.3%} norm {r['mean_norm']:.1f}")
+    print("  FVU by position: " + "  ".join(
+        f"{lab}: {summary['by_position']['raw'][lab]['all']['fvu']:.4f}" for lab in POS_LABELS
+        if summary["by_position"]["raw"][lab]["all"]))
     if "scaled" in summary["views"]:
         s = summary["views"]["scaled"]["all"]
         print(f"[{summary['label']}] scaled: FVU {s['fvu']:.4f} cos {s['mean_cos']:.4f} L0 {s['mean_l0']:.1f}")
