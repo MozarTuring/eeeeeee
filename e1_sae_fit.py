@@ -155,6 +155,7 @@ def summarize(a, sel, dense_thresh):
     return {
         "n_tokens": int(n),
         "fvu": float(a["err2"][sel].sum() / total_var),
+        "nmse": float(a["err2"][sel].sum() / a["sum_sq"][sel].sum()),
         "mse_per_token": float(a["err2"][sel].sum() / n),
         "mean_cos": float(a["cos"][sel].sum() / n),
         "mean_l0": float(a["l0"][sel].sum() / n),
@@ -195,6 +196,7 @@ def summarize_positions(a, sources):
         total_var = a["pos_sum_sq"][sel].sum() - (sum_x @ sum_x) / n
         return {"n_tokens": int(n),
                 "fvu": float(a["pos_err2"][sel].sum() / total_var),
+                "nmse": float(a["pos_err2"][sel].sum() / a["pos_sum_sq"][sel].sum()),
                 "mean_cos": float(a["pos_cos"][sel].sum() / n),
                 "mean_l0": float(a["pos_l0"][sel].sum() / n),
                 "mean_norm": float(a["pos_norm"][sel].sum() / n)}

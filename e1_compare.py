@@ -35,6 +35,25 @@ def load_run(path):
     return {"summary": summary, "arrays": arrays, "norm_edges": z["norm_edges"]}
 
 
+def nmse_of(a, source=None):
+    """NMSE = sum ||x - x_hat||^2 / sum ||x||^2 over all tokens (or one source), from the stored sums."""
+    err2, sum_sq = a["err2"], a["sum_sq"]
+    if source is not None:
+        err2, sum_sq = err2[source], sum_sq[source]
+    return float(err2.sum() / sum_sq.sum())
+
+
+def pos_metrics(a, source=None):
+    """Per position bucket: FVU, NMSE and mean cos, over all sources or one source."""
+    sel = slice(None) if source is None else slice(source, source + 1)
+    n = a["pos_n"][sel].sum(0)
+    sum_x = a["pos_sum_x"][sel].sum(0)
+    sum_sq = a["pos_sum_sq"][sel].sum(0)
+    err2 = a["pos_err2"][sel].sum(0)
+    var = sum_sq - (sum_x ** 2).sum(-1) / np.maximum(n, 1)
+    return {"fvu": err2 / var, "nmse": err2 / sum_sq, "cos": a["pos_cos"][sel].sum(0) / np.maximum(n, 1)}
+
+
 def freq(a, half=None, source=None):
     fire, n = a["fire"], a["n"]
     if source is not None:
@@ -96,35 +115,40 @@ def main():
     md = [f"# E1: SAE fit — ref = {report['ref']}",
           f"SAE: `{ref['summary']['sae']['repo']}/{ref['summary']['sae']['dir']}`"]
 
-    # 1. Global reconstruction / sparsity table.
+    # 1. Global reconstruction / sparsity table (NMSE recomputed from the stored sums, so older runs have it too).
     rows, report["global"] = [], {}
     for r, lab in zip(runs, labels):
         for view, s in r["summary"]["views"].items():
-            rows.append([lab, view] + [s["all"][c] for c in GLOBAL_COLS])
-            report["global"][f"{lab}/{view}"] = s["all"]
-    md += ["\n## Global (all sources)", md_table(["run", "view"] + GLOBAL_COLS, rows)]
+            nmse = nmse_of(r["arrays"][view])
+            rows.append([lab, view, nmse] + [s["all"][c] for c in GLOBAL_COLS])
+            report["global"][f"{lab}/{view}"] = {**s["all"], "nmse": nmse}
+    md += ["\n## Global (all sources)", md_table(["run", "view", "nmse"] + GLOBAL_COLS, rows)]
 
-    # 2. Per-source FVU (raw and, when present, scaled).
+    # 2. Per-source NMSE and FVU (raw and, when present, scaled).
     for view in ["raw", "scaled"]:
         present = [(r, lab) for r, lab in zip(runs, labels) if view in r["summary"]["views"]]
         if not present:
             continue
+        rows = [[src] + [nmse_of(r["arrays"][view], s) for r, _ in present] for s, src in enumerate(sources)]
+        md += [f"\n## NMSE per source ({view})", md_table(["source"] + [l for _, l in present], rows)]
         rows = [[src] + [r["summary"]["views"][view][src]["fvu"] for r, _ in present] for src in sources]
         md += [f"\n## FVU per source ({view})", md_table(["source"] + [l for _, l in present], rows)]
 
-    # 2b. FVU by token position (raw view; runs made before this was added have no by_position).
-    pos_runs = [(r, lab) for r, lab in zip(runs, labels) if "by_position" in r["summary"]]
+    # 2b. Reconstruction by token position (raw view; computed from the stored per-(source, bucket) sums).
+    pos_runs = [(r, lab) for r, lab in zip(runs, labels) if "pos_n" in r["arrays"]["raw"]]
     if pos_runs:
         buckets = list(pos_runs[0][0]["summary"]["by_position"]["raw"])
-        get = lambda r, b, src: (r["summary"]["by_position"]["raw"][b].get(src) or {}).get("fvu", float("nan"))
-        rows = [[lab] + [get(r, b, "all") for b in buckets] for r, lab in pos_runs]
-        md += ["\n## FVU by token position (raw, all sources)", md_table(["run"] + buckets, rows)]
-        report["fvu_by_position"] = {lab: {b: get(r, b, "all") for b in buckets} for r, lab in pos_runs}
-        for r, lab in pos_runs:
-            rows = [[src] + [get(r, b, src) for b in buckets] for src in sources]
-            md += [f"\n## FVU by position per source — {lab}", md_table(["source"] + buckets, rows)]
-            report["fvu_by_position"][lab]["per_source"] = {
-                src: {b: get(r, b, src) for b in buckets} for src in sources}
+        pm = {lab: pos_metrics(r["arrays"]["raw"]) for r, lab in pos_runs}
+        pm_src = {lab: [pos_metrics(r["arrays"]["raw"], s) for s in range(len(sources))] for r, lab in pos_runs}
+        report["by_position"] = {lab: {k: v.tolist() for k, v in m.items()} for lab, m in pm.items()}
+        report["by_position_buckets"] = buckets
+        for metric in ["nmse", "cos", "fvu"]:
+            rows = [[lab] + list(pm[lab][metric]) for _, lab in pos_runs]
+            md += [f"\n## {metric.upper()} by token position (raw, all sources)", md_table(["run"] + buckets, rows)]
+        for metric in ["nmse", "fvu"]:
+            for _, lab in pos_runs:
+                rows = [[src] + list(pm_src[lab][s][metric]) for s, src in enumerate(sources)]
+                md += [f"\n## {metric.upper()} by position per source — {lab}", md_table(["source"] + buckets, rows)]
 
     # 3. Feature-frequency drift vs noise floor (raw view).
     ra = ref["arrays"]["raw"]
@@ -199,22 +223,23 @@ def main():
     fig.savefig(out / "fvu_per_source.png", dpi=150)
 
     if pos_runs:
-        fig, axes = plt.subplots(1, len(pos_runs) + 1, figsize=(4.5 * (len(pos_runs) + 1), 4), sharey=True)
-        x = np.arange(len(buckets))
-        for r, lab in pos_runs:
-            axes[0].plot(x, [get(r, b, "all") for b in buckets], marker="o", label=lab)
-        axes[0].set(title="All sources", ylabel="FVU (raw)")
-        axes[0].legend()
-        for ax, (r, lab) in zip(axes[1:], pos_runs):
-            for src in sources:
-                ax.plot(x, [get(r, b, src) for b in buckets], marker=".", lw=1, label=src)
-            ax.set(title=lab)
-        axes[-1].legend(fontsize=6, ncol=2)
-        for ax in axes:
-            ax.set_xticks(x, buckets)
-            ax.set_xlabel("token position")
-        fig.tight_layout()
-        fig.savefig(out / "fvu_by_position.png", dpi=150)
+        for metric in ["nmse", "fvu"]:
+            fig, axes = plt.subplots(1, len(pos_runs) + 1, figsize=(4.5 * (len(pos_runs) + 1), 4), sharey=True)
+            x = np.arange(len(buckets))
+            for _, lab in pos_runs:
+                axes[0].plot(x, pm[lab][metric], marker="o", label=lab)
+            axes[0].set(title="All sources", ylabel=f"{metric.upper()} (raw)")
+            axes[0].legend()
+            for ax, (_, lab) in zip(axes[1:], pos_runs):
+                for s, src in enumerate(sources):
+                    ax.plot(x, pm_src[lab][s][metric], marker=".", lw=1, label=src)
+                ax.set(title=lab)
+            axes[-1].legend(fontsize=6, ncol=2)
+            for ax in axes:
+                ax.set_xticks(x, buckets)
+                ax.set_xlabel("token position")
+            fig.tight_layout()
+            fig.savefig(out / f"{metric}_by_position.png", dpi=150)
 
     print((out / "e1_report.md").read_text())
 

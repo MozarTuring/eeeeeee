@@ -21,4 +21,10 @@ CUDA_VISIBLE_DEVICES=1
 
 # PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --bidirectional --norm-ref ${PKQ_DATA_DIR}/backup/20261017_092409/output/summary.json --out output --label M0-bidir"
 
-PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --out output --label M0"
+# PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --out output --label M0"
+
+# PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --model google/gemma-2-2b-it --norm-ref ${PKQ_DATA_DIR}/backup/20261017_115544/output/summary.json --out output --label M0-it"
+
+# PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --bidirectional --norm-ref ${PKQ_DATA_DIR}/backup/20261017_115544/output/summary.json --out output --label M0-bidir"
+
+PKQ_RUN_COMMAND="python e1_compare.py --ref ${PKQ_DATA_DIR}/backup/20261017_115544/output --runs ${PKQ_DATA_DIR}/backup/20261017_115544/output ${PKQ_DATA_DIR}/backup/20261017_121053/output ${PKQ_DATA_DIR}/backup/20261017_121130/output --out output"
