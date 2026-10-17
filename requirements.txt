@@ -7,3 +7,5 @@ numpy
 scipy>=1.11
 matplotlib
 tqdm
+sentencepiece
+protobuf
