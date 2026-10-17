@@ -1,11 +1,11 @@
-torch>=2.3
-transformers>=4.46
-peft>=0.13
-datasets>=3.0
-huggingface_hub>=0.25
-numpy
-scipy>=1.11
-matplotlib
-tqdm
+# torch>=2.3
+# transformers>=4.46
+# peft>=0.13
+# datasets>=3.0
+# huggingface_hub>=0.25
+# numpy
+# scipy>=1.11
+# matplotlib
+# tqdm
 sentencepiece
 protobuf
