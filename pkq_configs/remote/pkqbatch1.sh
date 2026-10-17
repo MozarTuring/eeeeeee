@@ -37,4 +37,15 @@ CUDA_VISIBLE_DEVICES=1
 # PKQ_GPU_NUM=1
 # PKQ_RUN_COMMAND="python e1_compare.py --ref ${PKQ_DATA_DIR}/backup/20261017_115544/output --runs ${PKQ_DATA_DIR}/backup/20261017_115544/output ${PKQ_DATA_DIR}/backup/20261017_121053/output ${PKQ_DATA_DIR}/backup/20261017_121130/output ${PKQ_DATA_DIR}/backup/20261017_142143/output --out output"
 
-PKQ_RUN_COMMAND="torchrun --nproc_per_node=gpu train_splare.py --init-adapter ${PKQ_DATA_DIR}/backup/20261017_123949/output/adapter --out output"
+# PKQ_RUN_COMMAND="torchrun --nproc_per_node=gpu train_splare.py --init-adapter ${PKQ_DATA_DIR}/backup/20261017_123949/output/adapter --out output"
+
+# PKQ_GPU_NUM=1
+# PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --bidirectional --adapter ${PKQ_DATA_DIR}/backup/20261017_123949/output/adapter --adapter ${PKQ_DATA_DIR}/backup/20261017_200212/output/adapter --norm-ref ${PKQ_DATA_DIR}/backup/20261017_115544/output/summary.json --out output --label M2"
+
+# PKQ_GPU_NUM=1
+# PKQ_RUN_COMMAND="python e1_sae_fit.py --corpus ${PKQ_DATA_DIR}/backup/20262356/data/e1_corpus --layer 12 --sae-width 16k --bidirectional --adapter ${PKQ_DATA_DIR}/backup/20261017_123949/output/adapter --adapter ${PKQ_DATA_DIR}/backup/20261017_200212/output/checkpoint-1000 --norm-ref ${PKQ_DATA_DIR}/backup/20261017_115544/output/summary.json --out output --label M2-1k"
+
+# PKQ_GPU_NUM=1
+# PKQ_RUN_COMMAND="python e1_compare.py --ref ${PKQ_DATA_DIR}/backup/20261017_115544/output --runs ${PKQ_DATA_DIR}/backup/20261017_115544/output ${PKQ_DATA_DIR}/backup/20261017_121053/output ${PKQ_DATA_DIR}/backup/20261017_121130/output ${PKQ_DATA_DIR}/backup/20261017_142143/output ${PKQ_DATA_DIR}/backup/20261017_214854/output ${PKQ_DATA_DIR}/backup/20261017_214759/output --out output"
+
+PKQ_RUN_COMMAND="torchrun --nproc_per_node=gpu mteb_eval.py --adapter ${PKQ_DATA_DIR}/backup/20261017_123949/output/adapter --adapter ${PKQ_DATA_DIR}/backup/20261017_200212/output/adapter --out output --label M2"

@@ -7,5 +7,6 @@
 # scipy>=1.11
 # matplotlib
 # tqdm
-sentencepiece
-protobuf
+# sentencepiece
+# protobuf
+mteb>=1.20,<2

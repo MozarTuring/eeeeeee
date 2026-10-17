@@ -30,7 +30,7 @@ SAE_L0=${SAE_L0:-average_l0_82}   # SPLARE: variant with L0 closest to 100 (82 f
 
 # Backbones (skip GGUF and other non-HF weight formats).
 for m in google/gemma-2-2b google/gemma-2-2b-it; do
-    hf download "$m" --include "*.json" "*.safetensors" "tokenizer*"
+    hf download "$m" --include "*.json" --include "*.safetensors" --include "tokenizer*"
 done
 
 # SAE used by e1_sae_fit.py / train_splare.py (--layer/--sae-width/--sae-l0-dir must match).
