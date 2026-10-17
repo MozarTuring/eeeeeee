@@ -45,8 +45,21 @@ def parse_args():
     return ap.parse_args()
 
 
-def prefetch(tasks):
+def import_mteb():
+    """mteb 1.x imports transformers.AutoModelForVision2Seq at start-up (for the GME vision model, unused here);
+    transformers 5 renamed it to AutoModelForImageTextToText. Alias it so mteb imports; nothing we run uses it.
+    sentence_transformers replaces sys.modules["transformers"] when imported, so import it first and alias
+    on the module that is current afterwards."""
+    import sentence_transformers  # noqa: F401
+    tf = sys.modules["transformers"]
+    if not hasattr(tf, "AutoModelForVision2Seq"):
+        tf.AutoModelForVision2Seq = tf.AutoModelForImageTextToText
     import mteb
+    return mteb
+
+
+def prefetch(tasks):
+    mteb = import_mteb()
     for t in mteb.get_tasks(tasks=tasks):
         t.load_data()
         print(f"cached {t.metadata.name}: {t.metadata.dataset['path']}@{t.metadata.dataset['revision']}", flush=True)
@@ -154,8 +167,8 @@ def main():
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["HF_DATASETS_OFFLINE"] = "1"
     import torch
-    import mteb
     from drift.dist import cleanup, setup_dist
+    mteb = import_mteb()
 
     rank, world, local = setup_dist()
     device = f"cuda:{local}"
