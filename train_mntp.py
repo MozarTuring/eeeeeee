@@ -11,6 +11,8 @@ input embedding + Gemma-2 final-logit softcapping), so it loads directly in
 e1_sae_fit.py via `--adapter <out>/adapter`. Attention uses
 drift.modeling.bidirectional_mask, the same mask as the E1 analysis.
 
+Data (Tevatron/msmarco-passage-corpus) is read from the HF cache, filled by pkq_configs/download.sh.
+
 Multi-GPU (DDP, data sharded across ranks); also runs on one GPU:
     torchrun --nproc_per_node=gpu train_mntp.py --out output
 The global batch is fixed (--global-batch); gradient accumulation is derived from
@@ -27,13 +29,13 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from datasets import load_dataset
 from datasets.distributed import split_dataset_by_node
 from peft import LoraConfig, get_peft_model
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 
 from drift.dist import setup_dist
+from drift.localdata import load_local
 from drift.modeling import ResidCapture, bidirectional_mask, check_attention_mode
 
 
@@ -43,7 +45,7 @@ def log0(rank, *a):
 
 
 def text_stream(args, rank, world):
-    ds = load_dataset(args.dataset, name=args.dataset_config, split=args.split, streaming=True)
+    ds = load_local(args.data, streaming=True)
     ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
     if world > 1:
         ds = split_dataset_by_node(ds, rank=rank, world_size=world)
@@ -96,9 +98,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True)
     ap.add_argument("--model", default="google/gemma-2-2b")
-    ap.add_argument("--dataset", default="Tevatron/msmarco-passage-corpus")
-    ap.add_argument("--dataset-config", default=None)
-    ap.add_argument("--split", default="train")
+    ap.add_argument("--data", default="Tevatron/msmarco-passage-corpus",
+                    help="dataset repo id in the HF cache (pkq_configs/download.sh) or a local dir")
     ap.add_argument("--text-field", default="text")
     ap.add_argument("--max-len", type=int, default=256)
     ap.add_argument("--mask-prob", type=float, default=0.2)

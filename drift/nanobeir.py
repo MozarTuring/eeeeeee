@@ -1,25 +1,25 @@
 """NanoBEIR nDCG@10 for a sparse encoder, multi-GPU (corpus sharded across ranks, top-k merged).
 
-SPLARE used NanoBEIR nDCG@10 to select its temperature. Datasets: zeta-alpha-ai/Nano*, each with
-configs corpus / queries / qrels (split "train").
+SPLARE used NanoBEIR nDCG@10 to select its temperature. Datasets <org>/Nano* (default org
+zeta-alpha-ai), each with corpus / queries / qrels files, fetched into the HF cache by
+pkq_configs/download.sh.
 """
 import math
 
 import torch
 import torch.distributed as dist
-from datasets import load_dataset
 
 from drift.dist import is_dist
+from drift.localdata import load_local
 
 NANOBEIR = ["NanoArguAna", "NanoClimateFEVER", "NanoDBPedia", "NanoFEVER", "NanoFiQA2018", "NanoHotpotQA",
             "NanoMSMARCO", "NanoNFCorpus", "NanoNQ", "NanoQuoraRetrieval", "NanoSCIDOCS", "NanoSciFact",
             "NanoTouche2020"]
 
 
-def load_nanobeir(name):
-    corpus = load_dataset(f"zeta-alpha-ai/{name}", "corpus", split="train")
-    queries = load_dataset(f"zeta-alpha-ai/{name}", "queries", split="train")
-    qrels = load_dataset(f"zeta-alpha-ai/{name}", "qrels", split="train")
+def load_nanobeir(org, name):
+    repo = f"{org}/{name}"
+    corpus, queries, qrels = (load_local(repo, keyword=cfg) for cfg in ("corpus", "queries", "qrels"))
     doc_ids = [str(d["_id"]) for d in corpus]
     docs = [(d.get("title") or "") + (" " if d.get("title") else "") + d["text"] for d in corpus]
     rel = {}
@@ -37,7 +37,7 @@ def ndcg_at_10(ranked_doc_ids, rel):
 
 
 @torch.no_grad()
-def evaluate_nanobeir(encode_texts, rank, world, names=NANOBEIR, topk_q=40, topk_d=400, k=10):
+def evaluate_nanobeir(encode_texts, rank, world, org="zeta-alpha-ai", names=NANOBEIR, k=10):
     """encode_texts(texts, is_query) -> (n, W) Top-K-sparsified reps on this rank's device.
 
     Each rank encodes every query and its strided shard of the corpus, keeps its local top-k per
@@ -45,7 +45,7 @@ def evaluate_nanobeir(encode_texts, rank, world, names=NANOBEIR, topk_q=40, topk
     """
     results = {}
     for name in names:
-        doc_ids, docs, qids, qtexts, rel = load_nanobeir(name)
+        doc_ids, docs, qids, qtexts, rel = load_nanobeir(org, name)
         Q = encode_texts(qtexts, True)
         my = list(range(rank, len(docs), world))
         D = encode_texts([docs[i] for i in my], False)

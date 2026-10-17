@@ -5,7 +5,7 @@ the frozen Gemma Scope SAE maps resid_post to latent features, SPLADE pooling gi
 per text, score = dot product. A new LoRA is trained (SAE stays frozen) with
     L = KL(p_teacher || softmax(s / tau)) + lambda_q * FLOPS(q) + lambda_d * FLOPS(d)
 where p_teacher = softmax of cross-encoder scores over (1 positive + n negatives) per query.
-Teacher scores are computed online with the cross-encoder.
+Teacher scores are computed during training with the cross-encoder.
 
 Defaults follow SPLARE's hyper-parameter table (App. B) where reported: LoRA r=64, max length 128,
 batch 128 queries, 8 negatives/query, lr 5e-5, warmup ratio 0.01, lambda_q = lambda_d = 1e-4,
@@ -13,6 +13,9 @@ tau = 50 (Gemma Scope), 1 epoch (--steps), Top-K (40, 400) at inference, eval co
 
 The saved LoRA adapter applies on top of the merged MNTP adapter, so E1 can load the result with
     --adapter <mntp_adapter> --adapter <out>/adapter
+
+No network access: models, teacher and datasets are read from the HF cache, filled by
+pkq_configs/download.sh.
 
 Multi-GPU (DDP, data sharded across ranks; NanoBEIR corpus sharded too); also runs on one GPU:
     torchrun --nproc_per_node=gpu train_splare.py --init-adapter <mntp_adapter> --out output
@@ -28,15 +31,15 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from datasets import load_dataset
 from datasets.distributed import split_dataset_by_node
 from peft import LoraConfig, get_peft_model
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from drift.dist import setup_dist
+from drift.localdata import load_local
 from drift.modeling import ResidCapture, check_attention_mode, load_backbone
-from drift.nanobeir import NANOBEIR, evaluate_nanobeir, load_nanobeir
+from drift.nanobeir import NANOBEIR, evaluate_nanobeir
 from drift.sae import load_sae
 from drift.splare import encode, flops_reg, l0, topk_sparsify
 
@@ -52,8 +55,8 @@ def passage_text(p):
 
 
 def train_stream(args, rank, world):
-    """Yield (query, positive, [negatives]) from a Tevatron-format dataset."""
-    ds = load_dataset(args.train_dataset, split=args.train_split, streaming=True)
+    """Yield (query, positive, [negatives]) from the local Tevatron-format train files."""
+    ds = load_local(args.train_data, keyword="train", streaming=True)
     ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
     if world > 1:
         ds = split_dataset_by_node(ds, rank=rank, world_size=world)
@@ -83,8 +86,9 @@ def main():
     ap.add_argument("--sae-l0-dir", default="average_l0_82")
     ap.add_argument("--teacher", default="naver/trecdl22-crossencoder-debertav3")
     ap.add_argument("--teacher-max-len", type=int, default=256)
-    ap.add_argument("--train-dataset", default="Tevatron/msmarco-passage")
-    ap.add_argument("--train-split", default="train")
+    ap.add_argument("--train-data", default="Tevatron/msmarco-passage",
+                    help="dataset repo id in the HF cache (or a local dir); only files with 'train' in the path")
+    ap.add_argument("--nanobeir-org", default="zeta-alpha-ai")
     ap.add_argument("--n-neg", type=int, default=8)
     ap.add_argument("--max-len", type=int, default=128)
     ap.add_argument("--steps", type=int, default=3125, help="~1 epoch of ~400k MS MARCO queries at batch 128")
@@ -198,17 +202,12 @@ def main():
 
     def run_eval(step):
         t = time.time()
-        res = evaluate_nanobeir(encode_texts, rank, world, args.eval_sets, args.topk_q, args.topk_d)
+        res = evaluate_nanobeir(encode_texts, rank, world, args.nanobeir_org, args.eval_sets)
         log0(rank, f"step {step} | NanoBEIR nDCG@10 mean {res['mean']:.4f} | " +
              " ".join(f"{k.replace('Nano', '')}:{v:.3f}" for k, v in res.items() if k != "mean") +
              f" | {time.time() - t:.0f}s")
         log({"step": step, "nanobeir": res})
 
-    if rank == 0:  # fill the HF cache once before all ranks read it
-        for name in args.eval_sets:
-            load_nanobeir(name)
-    if world > 1:
-        dist.barrier()
     if not args.skip_initial_eval:
         run_eval(0)
 

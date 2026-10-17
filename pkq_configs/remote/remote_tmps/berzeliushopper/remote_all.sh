@@ -13,7 +13,7 @@ export PKQ_RUN_TIME="1-00:00:00"
 export PKQ_SLURM_FILE=slurm.sh
 export PKQ_build_flashattn=
 export PKQ_NOTEBOOK=
-export PKQ_INTERACTIVE=
+export PKQ_INTERACTIVE=1
 export MEM_PER_TASK="$((80 * PKQ_GPU_NUM))G"
 export CPUS_PER_TASK=$((8 * PKQ_GPU_NUM))
 export CUDA_VISIBLE_DEVICES=1
@@ -76,4 +76,4 @@ COMMON="--corpus $CORPUS --layer $LAYER --sae-width $WIDTH"
 
 
 pip list > pkq_configs/packages.txt
-sbatch --signal=B:USR1@120 --time=1-00:00:00 --nodes=1 --output=pkq_configs/logs_20261017_143933/job-%j.out --error=pkq_configs/logs_20261017_143933/job-%j.out  --gpus=4 --cpus-per-task=32 --mem=96G  -A berzelius-2026-243 --partition=berzelius-hopper pkq_configs/remote/remote_tmps/berzeliushopper/slurm.sh
+sbatch --signal=B:USR1@120 --time=1-00:00:00 --nodes=1 --output=pkq_configs/logs_20261017_152354/job-%j.out --error=pkq_configs/logs_20261017_152354/job-%j.out  --gpus=4 --cpus-per-task=32 --mem=96G  -A berzelius-2026-243 --partition=berzelius-hopper pkq_configs/remote/remote_tmps/berzeliushopper/slurm.sh
