@@ -49,8 +49,8 @@ def log0(rank, *a):
         print(*a, flush=True)
 
 
-def passage_text(p):
-    t = p.get("title") or ""
+def passage_text(p, use_title):
+    t = (p.get("title") or "") if use_title else ""
     return (t + " " + p["text"]) if t else p["text"]
 
 
@@ -69,7 +69,8 @@ def train_stream(args, rank, world):
             if not pos or not neg:
                 continue
             negs = rng.sample(neg, args.n_neg) if len(neg) >= args.n_neg else rng.choices(neg, k=args.n_neg)
-            yield ex["query"], passage_text(rng.choice(pos)), [passage_text(n) for n in negs]
+            yield (ex["query"], passage_text(rng.choice(pos), args.use_title),
+                   [passage_text(n, args.use_title) for n in negs])
         epoch += 1
 
 
@@ -89,6 +90,8 @@ def main():
     ap.add_argument("--train-data", default="Tevatron/msmarco-passage",
                     help="dataset repo id in the HF cache (or a local dir); only files with 'train' in the path")
     ap.add_argument("--nanobeir-org", default="zeta-alpha-ai")
+    ap.add_argument("--use-title", action="store_true",
+                    help="prepend Tevatron's passage titles (standard MS MARCO passage ranking has none)")
     ap.add_argument("--n-neg", type=int, default=8)
     ap.add_argument("--max-len", type=int, default=128)
     ap.add_argument("--steps", type=int, default=3125, help="~1 epoch of ~400k MS MARCO queries at batch 128")

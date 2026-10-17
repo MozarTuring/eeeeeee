@@ -26,12 +26,15 @@ def find_files(root, keyword=None):
     """
     root = Path(root)
     for builder, pats in PATTERNS.items():
-        files = sorted(p for pat in pats for p in root.rglob(pat) if ".cache" not in p.parts)
+        # Skip HF metadata dirs *inside* root (the HF cache itself lives under ~/.cache).
+        files = sorted(p for pat in pats for p in root.rglob(pat) if ".cache" not in p.relative_to(root).parts)
         if keyword is not None:
             files = [p for p in files if keyword in p.relative_to(root).as_posix()]
         if files:
             return builder, [str(p) for p in files]
-    raise FileNotFoundError(f"no data files under {root}" + (f" matching {keyword!r}" if keyword else ""))
+    present = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+    raise FileNotFoundError(f"no data files under {root}" + (f" matching {keyword!r}" if keyword else "") +
+                            f"; present: {present[:50]}")
 
 
 def load_local(repo_or_dir, keyword=None, streaming=False):
