@@ -7,17 +7,17 @@ export RUN_PROJ=
 cd ${RUN_DIR_HOME}/project_remote_pkq/${RUN_PROJ}
 export PKQ_PYTHON="3.10"
 export PKQ_SERVER_NAME=berzeliushopper
-export PKQ_GPU_NUM=1
+export PKQ_GPU_NUM=4
 export PKQ_NODES_NUM=1
 export PKQ_RUN_TIME="1-00:00:00"
 export PKQ_SLURM_FILE=slurm.sh
 export PKQ_build_flashattn=
 export PKQ_NOTEBOOK=
-export PKQ_INTERACTIVE=
+export PKQ_INTERACTIVE=1
 export MEM_PER_TASK="$((80 * PKQ_GPU_NUM))G"
 export CPUS_PER_TASK=$((8 * PKQ_GPU_NUM))
 export CUDA_VISIBLE_DEVICES=1
-export PKQ_RUN_COMMAND="python e1_compare.py --ref ${PKQ_DATA_DIR}/backup/20261017_115544/output --runs ${PKQ_DATA_DIR}/backup/20261017_115544/output ${PKQ_DATA_DIR}/backup/20261017_121053/output ${PKQ_DATA_DIR}/backup/20261017_121130/output ${PKQ_DATA_DIR}/backup/20261017_142143/output ${PKQ_DATA_DIR}/backup/20261017_214854/output ${PKQ_DATA_DIR}/backup/20261017_214759/output --out output"
+export PKQ_RUN_COMMAND="torchrun --nproc_per_node=gpu mteb_eval.py --adapter ${PKQ_DATA_DIR}/backup/20261017_123949/output/adapter --adapter ${PKQ_DATA_DIR}/backup/20261017_200212/output/adapter --out output --label M2"
 if [[ -z ${PKQ_MODULES} ]]; then
 export PKQ_MODULES="Miniforge3"
 fi
@@ -90,6 +90,9 @@ COMMON="--corpus $CORPUS --layer $LAYER --sae-width $WIDTH"
 
 [ -f "${PKQ_DATA_DIR}/backup/20262356/$CORPUS/meta.json" ] || python build_corpus.py --tokenizer google/gemma-2-2b --out "$CORPUS"
 
+# MTEB(eng, v2) retrieval datasets at the revisions pinned by mteb (into the HF cache; mteb_eval.py then runs offline).
+python mteb_eval.py --prefetch
+
 
 pip list > pkq_configs/packages.txt
-sbatch --signal=B:USR1@120 --time=1-00:00:00 --nodes=1 --output=pkq_configs/logs_20261017_215907/job-%j.out --error=pkq_configs/logs_20261017_215907/job-%j.out  --gpus=1 --cpus-per-task=8 --mem=24G  -A berzelius-2026-243 --partition=berzelius-hopper pkq_configs/remote/remote_tmps/berzeliushopper/slurm.sh
+sbatch --signal=B:USR1@120 --time=1-00:00:00 --nodes=1 --output=pkq_configs/logs_20261018_001751/job-%j.out --error=pkq_configs/logs_20261018_001751/job-%j.out  --gpus=4 --cpus-per-task=32 --mem=96G  -A berzelius-2026-243 --partition=berzelius-hopper pkq_configs/remote/remote_tmps/berzeliushopper/slurm.sh

@@ -54,6 +54,22 @@ def import_mteb():
     tf = sys.modules["transformers"]
     if not hasattr(tf, "AutoModelForVision2Seq"):
         tf.AutoModelForVision2Seq = tf.AutoModelForImageTextToText
+
+    # Offline, `datasets` loads from its cache and refuses a config-less load_dataset() when a repo has several
+    # cached configs (mteb loads qrels without a name; online the Hub resolves it to "default"). In the MTEB
+    # repos the qrels are the "default" config, so retry with that name on exactly this error.
+    import datasets
+    orig_load = datasets.load_dataset
+
+    def load_dataset(path, *a, **kw):
+        try:
+            return orig_load(path, *a, **kw)
+        except ValueError as e:
+            if "configurations in the cache" in str(e) and not a and kw.get("name") is None:
+                return orig_load(path, *a, name="default", **kw)
+            raise
+
+    datasets.load_dataset = load_dataset
     import mteb
     return mteb
 
