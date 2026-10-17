@@ -33,18 +33,8 @@ from peft import LoraConfig, get_peft_model
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 
+from drift.dist import setup_dist
 from drift.modeling import ResidCapture, bidirectional_mask, check_attention_mode
-
-
-def setup_dist():
-    if "RANK" in os.environ:
-        dist.init_process_group("nccl")
-        rank, world = dist.get_rank(), dist.get_world_size()
-        local = int(os.environ["LOCAL_RANK"])
-    else:
-        rank, world, local = 0, 1, 0
-    torch.cuda.set_device(local)
-    return rank, world, local
 
 
 def log0(rank, *a):

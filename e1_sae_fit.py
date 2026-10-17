@@ -17,6 +17,10 @@ Two "views" are computed:
 
 BOS and padding positions are excluded (Gemma Scope was not trained on BOS).
 
+Multi-GPU: `torchrun --nproc_per_node=gpu e1_sae_fit.py ...` splits the documents across
+GPUs and sums the statistics (results are identical to a single-GPU run up to float
+summation order). Plain `python e1_sae_fit.py ...` runs on one GPU.
+
 Examples:
   # M0: base model, causal attention (the SAE's native setting)
   python e1_sae_fit.py --corpus data/e1_corpus --out runs/e1/m0 --label M0
@@ -41,6 +45,7 @@ import transformers
 from tqdm import tqdm
 
 from drift.corpus import Corpus
+from drift.dist import all_reduce_, cleanup, setup_dist
 from drift.modeling import ResidCapture, check_attention_mode, forward_resid, load_backbone
 from drift.sae import load_sae
 
@@ -76,6 +81,15 @@ class Stats:
         self.act_sum = torch.zeros(G * W, **f64)
         self.act_max = torch.zeros(W, dtype=torch.float32, device=device)
         self.norm_edges = torch.tensor(NORM_EDGES, dtype=torch.float32, device=device)
+
+    def all_reduce(self):
+        """Sum every accumulator across GPUs (max for act_max)."""
+        for name in ["n", "sum_x", "sum_sq", "err2", "cos", "norm", "norm_sq", "l0",
+                     "l0_hist", "norm_hist", "fire", "act_sum"]:
+            all_reduce_(getattr(self, name))
+        for v in self.pos.values():
+            all_reduce_(v)
+        all_reduce_(self.act_max, op="max")
 
     @torch.no_grad()
     def update(self, x, g, gp, sae):
@@ -250,17 +264,26 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    device = "cuda"
+    rank, world, local = setup_dist()
+    device = f"cuda:{local}"
     torch.manual_seed(args.seed)
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
+    if rank == 0:
+        out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
+    say = (lambda *a: print(*a, flush=True)) if rank == 0 else (lambda *a: None)
 
     corpus = Corpus(args.corpus)
     if corpus.meta["tokenizer"] != args.model:
-        print(f"NOTE: corpus tokenised with {corpus.meta['tokenizer']}, model is {args.model}")
+        say(f"NOTE: corpus tokenised with {corpus.meta['tokenizer']}, model is {args.model}")
     sources = corpus.sources
     bos_id, pad_id = corpus.meta["bos_token_id"], corpus.meta["pad_token_id"]
+    lens = corpus.lengths()
+
+    def shard(doc_ids):
+        """This rank's docs: every world-th doc of the length-sorted list (balanced token load)."""
+        doc_ids = np.asarray(doc_ids)
+        return doc_ids[np.argsort(lens[doc_ids], kind="stable")][rank::world]
 
     model, tok = load_backbone(args.model, args.adapter, layer=args.layer,
                                dtype=getattr(torch, args.dtype), device=device)
@@ -268,40 +291,48 @@ def main():
         raise ValueError("Tokenizer mismatch between corpus and model.")
     capture = ResidCapture(model, args.layer)
     attn_check_diff = check_attention_mode(model, capture, tok, args.bidirectional, device)
-    print(f"attention mode check ok (bidirectional={args.bidirectional}, max diff {attn_check_diff:.3g})")
+    say(f"attention mode check ok (bidirectional={args.bidirectional}, max diff {attn_check_diff:.3g}); "
+        f"{world} GPU(s)")
 
     sae = load_sae(args.sae_kind, repo=args.sae_repo, layer=args.layer, width=args.sae_width,
                    l0_dir=args.sae_l0_dir, device=device)
     if sae.d_model != model.config.hidden_size:
         raise ValueError(f"SAE d_model {sae.d_model} != model hidden size {model.config.hidden_size}")
-    print(f"SAE: {sae.meta['repo']}/{sae.meta['dir']} (width {sae.width})")
+    say(f"SAE: {sae.meta['repo']}/{sae.meta['dir']} (width {sae.width})")
 
-    # Calibration: mean activation norm on a fixed doc subset (same subset for every run).
+    # Calibration: mean activation norm on a fixed doc subset (same subset for every run and GPU count).
     rng = np.random.default_rng(args.seed)
     calib_ids = np.sort(rng.choice(len(corpus), min(args.calib_docs, len(corpus)), replace=False))
-    norm_sum, norm_n = 0.0, 0
-    for ids, attn, src, half in corpus.batches(args.max_batch_tokens, pad_id, calib_ids):
+    norm_acc = torch.zeros(2, dtype=torch.float64, device=device)  # sum ||x||, n
+    for ids, attn, src, half in corpus.batches(args.max_batch_tokens, pad_id, shard(calib_ids)):
         x, _, _ = valid_activations(model, capture, ids, attn, src, half, args.bidirectional, bos_id, device)
-        norm_sum += x.norm(dim=-1).double().sum().item()
-        norm_n += len(x)
-    calib_mean_norm = norm_sum / norm_n
+        norm_acc += torch.tensor([x.norm(dim=-1).double().sum().item(), len(x)], dtype=torch.float64, device=device)
+    all_reduce_(norm_acc)
+    calib_mean_norm = (norm_acc[0] / norm_acc[1]).item()
 
     views = {"raw": 1.0}
     if args.norm_ref:
         ref = json.loads(Path(args.norm_ref).read_text())
         views["scaled"] = ref["calib_mean_norm"] / calib_mean_norm
-    print(f"calib mean norm {calib_mean_norm:.2f}; views: {views}")
+    say(f"calib mean norm {calib_mean_norm:.2f}; views: {views}")
 
     G = len(sources) * 2
     P = len(sources) * len(POS_LABELS)
     stats = {v: Stats(G, P, sae.width, sae.d_model, device) for v in views}
-    n_batches = sum(1 for _ in corpus.batches(args.max_batch_tokens, pad_id))
-    for ids, attn, src, half in tqdm(corpus.batches(args.max_batch_tokens, pad_id), total=n_batches):
+    my_docs = shard(np.arange(len(corpus)))
+    n_batches = sum(1 for _ in corpus.batches(args.max_batch_tokens, pad_id, my_docs))
+    for ids, attn, src, half in tqdm(corpus.batches(args.max_batch_tokens, pad_id, my_docs),
+                                     total=n_batches, disable=rank != 0):
         x, g, gp = valid_activations(model, capture, ids, attn, src, half, args.bidirectional, bos_id, device)
         for v, scale in views.items():
             for i in range(0, len(x), args.sae_chunk):
                 sl = slice(i, i + args.sae_chunk)
                 stats[v].update(x[sl] * scale, g[sl], gp[sl], sae)
+    for s in stats.values():
+        s.all_reduce()
+    if rank != 0:
+        cleanup()
+        return
 
     arrays = {v: s.to_numpy(len(sources)) for v, s in stats.items()}
     summary = {
@@ -313,7 +344,7 @@ def main():
         "view_scales": views,
         "attn_check_max_diff": attn_check_diff,
         "env": {"torch": torch.__version__, "transformers": transformers.__version__,
-                "gpu": torch.cuda.get_device_name(), "host": platform.node()},
+                "gpu": torch.cuda.get_device_name(), "host": platform.node(), "world_size": world},
         "runtime_sec": time.time() - t0,
         "views": {v: summarize_all(a, sources, args.dense_thresh) for v, a in arrays.items()},
         "by_position": {v: summarize_positions(a, sources) for v, a in arrays.items()},
@@ -334,6 +365,7 @@ def main():
     if not args.adapter and not args.bidirectional and r["fvu"] > 0.3:
         print("WARNING: high FVU for the base causal model; check layer / SAE choice.")
     print(f"done in {summary['runtime_sec']/60:.1f} min -> {out}")
+    cleanup()
 
 
 if __name__ == "__main__":
