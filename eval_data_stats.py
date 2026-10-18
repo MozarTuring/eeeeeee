@@ -16,6 +16,9 @@ from pathlib import Path
 
 
 def doc_text(d):
+    """Corpus entry -> text as mteb_eval.py encodes it (mteb gives either a string or a {title, text} dict)."""
+    if isinstance(d, str):
+        return d
     t = (d.get("title") or "").strip()
     return (t + " " + d.get("text", "")).strip() if t else d.get("text", "")
 
